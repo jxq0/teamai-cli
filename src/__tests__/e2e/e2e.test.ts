@@ -92,7 +92,7 @@ describe('CLI basics', () => {
     expect(installHelp.code).toBe(0);
     // Parent lists the install subcommand; the subcommand is reachable.
     expect(pkgHelp.output).toContain('install');
-    expect(installHelp.output).toContain('Install team npm packages and Claude plugins');
+    expect(installHelp.output).toContain('Install team npm packages, Claude plugins, and CodeBuddy plugins');
   });
 });
 

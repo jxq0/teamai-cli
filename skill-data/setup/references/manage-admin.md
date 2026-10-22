@@ -225,16 +225,33 @@ teamai dashboard --port 8080 # custom port
 
 Opens a local web UI for team coding-session activity and knowledge-base health.
 
-## Team packages (npm + Claude plugins)
+## Team packages (npm, Claude plugins, CodeBuddy plugins)
 
-Declare packages once; members get a prompt to install them (TeamAI never runs
-third-party package code automatically):
+Declare packages once; members get a prompt to install npm packages and Claude
+plugins, and an interactive `teamai pull` installs declared CodeBuddy plugins
+by itself (a machine without the CodeBuddy CLI skips them):
 
 ```bash
 teamai packages install typescript          # npm dependency
 teamai packages install eslint@latest --global   # global CLI tool
 teamai packages install code-review@claude-plugins-official   # Claude plugin
 teamai push                                 # share the updated teamai.yaml
+```
+
+A CodeBuddy plugin needs its marketplace declared under `packages.codebuddy`
+first. Leave the marketplace's `repo` out when the plugins live in the team
+repository's `plugins/` directory:
+
+```yaml
+packages:
+  codebuddy:
+    marketplaces:
+      - name: herdr-codebuddy
+        repo: git@git.woa.com:acme/herdr-codebuddy.git
+      - name: acme-team
+    plugins:
+      - name: herdr-codebuddy@herdr-codebuddy
+      - name: review-kit@acme-team
 ```
 
 ## Shared environment variables, hooks and MCP servers

@@ -1435,6 +1435,7 @@ export interface GlobalOptions {
   registry?: string;
   npm?: boolean;
   claude?: boolean;
+  codebuddy?: boolean;
   verbose?: boolean;
   silent?: boolean;
   /**

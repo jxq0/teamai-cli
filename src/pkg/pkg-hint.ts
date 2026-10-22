@@ -22,12 +22,20 @@ export function buildPackageHintMessage(
   npmCount: number,
   claudeCount: number,
   marketplaceCount = 0,
+  codebuddyCount = 0,
+  codebuddyMarketplaceCount = 0,
 ): string {
   const summary = [
     npmCount > 0 ? `${npmCount} npm package${npmCount === 1 ? '' : 's'}` : '',
     claudeCount > 0 ? `${claudeCount} Claude plugin${claudeCount === 1 ? '' : 's'}` : '',
     marketplaceCount > 0
       ? `${marketplaceCount} Claude marketplace${marketplaceCount === 1 ? '' : 's'}`
+      : '',
+    codebuddyCount > 0
+      ? `${codebuddyCount} CodeBuddy plugin${codebuddyCount === 1 ? '' : 's'}`
+      : '',
+    codebuddyMarketplaceCount > 0
+      ? `${codebuddyMarketplaceCount} CodeBuddy marketplace${codebuddyMarketplaceCount === 1 ? '' : 's'}`
       : '',
   ].filter(Boolean).join(' and ');
   return [
@@ -84,6 +92,8 @@ async function computePackageHintState(cwd: string): Promise<PackageHintState | 
       manifest.packages.npm?.length ?? 0,
       manifest.packages.claude?.plugins.length ?? 0,
       manifest.packages.claude?.marketplaces.length ?? 0,
+      manifest.packages.codebuddy?.plugins.length ?? 0,
+      manifest.packages.codebuddy?.marketplaces.length ?? 0,
     ),
   };
 }

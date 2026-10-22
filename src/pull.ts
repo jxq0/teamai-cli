@@ -3408,6 +3408,20 @@ export async function pull(
       localConfig: scriptOwner ?? undefined,
     });
   }
+
+  // 8. CodeBuddy plugins the team declares. An interactive pull is a person
+  //    asking for the team's content, so it installs them. The SessionStart
+  //    and git-hook pulls do not: they leave the declaration to pkg-hint and
+  //    the explicit `teamai packages`. A failure is a warning, because the
+  //    rest of the pull already landed.
+  if (!options.dryRun && options.interactive === true && scriptOwner) {
+    try {
+      const { installCodeBuddyPackages } = await import('./pkg/commands.js');
+      await installCodeBuddyPackages(scriptOwner);
+    } catch (error) {
+      log.warn(`CodeBuddy plugins were not installed: ${(error as Error).message}`);
+    }
+  }
 }
 
 /**

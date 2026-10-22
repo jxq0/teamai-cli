@@ -275,6 +275,24 @@ packages:
 
 After pull, run `teamai packages`.
 
+### CodeBuddy plugins
+
+A CodeBuddy marketplace and its plugins are declared the same way. Leave `repo` out when the marketplace is the team repository itself; its plugins live under `plugins/<name>/` with a `.codebuddy-plugin/plugin.json`.
+
+```yaml
+packages:
+  codebuddy:
+    marketplaces:
+      - name: herdr-codebuddy
+        repo: git@git.woa.com:acme/herdr-codebuddy.git
+      - name: acme-team
+    plugins:
+      - name: herdr-codebuddy@herdr-codebuddy
+      - name: review-kit@acme-team
+```
+
+An interactive `teamai pull` installs these plugins for the member. `teamai packages` installs them too, together with npm packages and Claude plugins. A machine without the CodeBuddy CLI skips them. `teamai push` commits `plugins/` and refreshes `.codebuddy-plugin/marketplace.json` with the team repository's plugins.
+
 ## Docs
 
 Put files in the team repo's `docs/`. Members receive them on `pull`. To limit a directory, declare it under `resources.docs`:

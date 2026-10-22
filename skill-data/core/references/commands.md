@@ -88,16 +88,18 @@ Generated: do not edit by hand. Regenerate with
 
 ## packages
 
-- `teamai packages [target]` — Install team npm packages and Claude plugins declared in teamai.yaml
+- `teamai packages [target]` — Install team npm packages, Claude plugins, and CodeBuddy plugins declared in teamai.yaml
   - `-g, --global` — Install an npm target globally (for CLI tools)
   - `--registry <url>` — Use a specific npm registry for this target
   - `--npm` — Treat an ambiguous target as an npm package
   - `--claude` — Treat the target as a Claude plugin
-  - `teamai packages install [target]` — Install team npm packages and Claude plugins declared in teamai.yaml
+  - `--codebuddy` — Treat the target as a CodeBuddy plugin
+  - `teamai packages install [target]` — Install team npm packages, Claude plugins, and CodeBuddy plugins declared in teamai.yaml
     - `-g, --global` — Install an npm target globally (for CLI tools)
     - `--registry <url>` — Use a specific npm registry for this target
     - `--npm` — Treat an ambiguous target as an npm package
     - `--claude` — Treat the target as a Claude plugin
+    - `--codebuddy` — Treat the target as a CodeBuddy plugin
 
 ## doctor
 

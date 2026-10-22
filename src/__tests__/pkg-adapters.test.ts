@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ClaudePluginAdapter } from '../pkg/adapters/claude-plugin.js';
+import { CodeBuddyPluginAdapter } from '../pkg/adapters/codebuddy-plugin.js';
 import { extractNpmLockEntries, NpmAdapter } from '../pkg/adapters/npm.js';
 import type { CommandExecutor } from '../utils/exec.js';
 
@@ -579,3 +580,194 @@ describe('ClaudePluginAdapter', () => {
     ]);
   });
 });
+
+describe('CodeBuddyPluginAdapter', () => {
+  const declaration = {
+    marketplaces: [{
+      name: 'herdr-codebuddy',
+      repo: 'git@git.woa.com:acme/herdr.git',
+    }],
+    plugins: [{ name: 'herdr-codebuddy@herdr-codebuddy' }],
+  };
+
+  it('adds the marketplace, installs the plugin, and snapshots JSON state', async () => {
+    let marketplaceQueries = 0;
+    const execute = vi.fn<CommandExecutor>().mockImplementation(async (_command, args) => {
+      const line = args.join(' ');
+      if (line === 'plugin --help') return { code: 0, stdout: 'plugin help', stderr: '' };
+      if (line === 'plugin marketplace list') {
+        marketplaceQueries++;
+        return {
+          code: 0,
+          stdout: marketplaceQueries === 1
+            ? '[]'
+            : JSON.stringify([{ name: 'herdr-codebuddy', type: 'git' }]),
+          stderr: '',
+        };
+      }
+      if (line === 'plugin list --json') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{
+            id: 'herdr-codebuddy@herdr-codebuddy',
+            version: '1.0.0',
+            scope: 'user',
+            enabled: true,
+            installPath: '/tmp/plugins/herdr',
+          }]),
+          stderr: '',
+        };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    process.env.SERVER__PORT = '55914';
+    process.env.CODEBUDDY_SERVICE_PROXY_URL = 'http://127.0.0.1:55914';
+
+    try {
+      const lock = await new CodeBuddyPluginAdapter(execute).install(
+        declaration,
+        { cwd: '/tmp/project', scope: 'user' },
+      );
+
+      expect(execute).toHaveBeenCalledWith(
+        'codebuddy',
+        [
+          'plugin', 'marketplace', 'add', 'git@git.woa.com:acme/herdr.git',
+          '-n', 'herdr-codebuddy',
+        ],
+        expect.objectContaining({ cwd: '/tmp/project' }),
+      );
+      expect(execute).toHaveBeenCalledWith(
+        'codebuddy',
+        ['plugin', 'install', 'herdr-codebuddy@herdr-codebuddy', '--scope', 'user'],
+        expect.objectContaining({ cwd: '/tmp/project' }),
+      );
+      const installCall = execute.mock.calls.find(([, args]) =>
+        args.includes('install'));
+      expect(installCall?.[2]?.env?.SERVER__PORT).toBeUndefined();
+      expect(installCall?.[2]?.env?.CODEBUDDY_SERVICE_PROXY_URL).toBeUndefined();
+      expect(lock.plugins[0]).toMatchObject({
+        id: 'herdr-codebuddy@herdr-codebuddy',
+        version: '1.0.0',
+        enabled: true,
+      });
+    } finally {
+      delete process.env.SERVER__PORT;
+      delete process.env.CODEBUDDY_SERVICE_PROXY_URL;
+    }
+  });
+
+  it('uses the team checkout for a marketplace without a repo', async () => {
+    let marketplaceQueries = 0;
+    const execute = vi.fn<CommandExecutor>().mockImplementation(async (_command, args) => {
+      const line = args.join(' ');
+      if (line === 'plugin --help') return { code: 0, stdout: 'plugin help', stderr: '' };
+      if (line === 'plugin marketplace list') {
+        marketplaceQueries++;
+        return {
+          code: 0,
+          stdout: marketplaceQueries === 1
+            ? '[]'
+            : JSON.stringify([{ name: 'team', type: 'directory' }]),
+          stderr: '',
+        };
+      }
+      if (line === 'plugin list --json') {
+        return { code: 0, stdout: '[]', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    });
+
+    await new CodeBuddyPluginAdapter(execute).install(
+      { marketplaces: [{ name: 'team' }], plugins: [] },
+      { cwd: '/tmp/project', scope: 'project', teamRepoPath: '/tmp/team-repo' },
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      'codebuddy',
+      ['plugin', 'marketplace', 'add', '/tmp/team-repo', '-n', 'team'],
+      expect.objectContaining({ cwd: '/tmp/project' }),
+    );
+  });
+
+  it('refreshes a registered directory marketplace before installing', async () => {
+    const execute = vi.fn<CommandExecutor>().mockImplementation(async (_command, args) => {
+      const line = args.join(' ');
+      if (line === 'plugin --help') return { code: 0, stdout: 'plugin help', stderr: '' };
+      if (line === 'plugin marketplace list') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{ name: 'team', type: 'directory' }]),
+          stderr: '',
+        };
+      }
+      if (line === 'plugin list --json') {
+        return { code: 0, stdout: '[]', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    });
+
+    await new CodeBuddyPluginAdapter(execute).install(
+      { marketplaces: [{ name: 'team' }], plugins: [{ name: 'review@team' }] },
+      { cwd: '/tmp/project', scope: 'project', teamRepoPath: '/tmp/team-repo' },
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      'codebuddy',
+      ['plugin', 'marketplace', 'update', 'team'],
+      expect.objectContaining({ cwd: '/tmp/project' }),
+    );
+    expect(execute).toHaveBeenCalledWith(
+      'codebuddy',
+      ['plugin', 'install', 'review@team', '--scope', 'project'],
+      expect.objectContaining({ cwd: '/tmp/project' }),
+    );
+  });
+
+  it('does not invoke the CodeBuddy CLI in dry-run mode', async () => {
+    const execute = vi.fn<CommandExecutor>();
+    await new CodeBuddyPluginAdapter(execute).install(
+      declaration,
+      { cwd: '/tmp/project', scope: 'project', dryRun: true },
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('reports a declared plugin that is missing or at another version', async () => {
+    const execute = vi.fn<CommandExecutor>().mockImplementation(async (_command, args) => {
+      if (args.join(' ') === 'plugin list --json') {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{
+            id: 'review@team',
+            version: '1.0.0',
+            scope: 'user',
+            enabled: false,
+          }]),
+          stderr: '',
+        };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    });
+
+    const statuses = await new CodeBuddyPluginAdapter(execute).status({
+      marketplaces: [{ name: 'team' }],
+      plugins: [
+        { name: 'review@team', version: '2.0.0' },
+        { name: 'lint@team' },
+      ],
+    }, { cwd: '/tmp/project', scope: 'user' });
+
+    expect(statuses).toEqual([
+      {
+        name: 'review@team',
+        installed: false,
+        version: '1.0.0',
+        enabled: false,
+        detail: 'declared 2.0.0, installed 1.0.0',
+      },
+      { name: 'lint@team', installed: false, detail: 'declared but not installed' },
+    ]);
+  });
+});
+

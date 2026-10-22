@@ -707,27 +707,27 @@ async function pushGroup(args: {
       if (supersedes) pushedFiles.push(supersedes);
     }
 
-    // Refresh marketplace.json if it exists and skills were pushed
-    if (items.some((i) => i.type === 'skills')) {
-      try {
-        const { refreshMarketplace } = await import('./resources/marketplace.js');
-        const updated = await refreshMarketplace(localConfig.repo.localPath);
-        if (updated) {
-          pushedFiles.push('.codebuddy-plugin/marketplace.json');
-          log.debug('Refreshed marketplace.json');
-        }
-      } catch (e) {
-        log.debug(`Marketplace refresh skipped: ${(e as Error).message}`);
+    // Refresh marketplace.json when it exists: skills and the full plugins
+    // under plugins/ both register there. A no-op when nothing changed.
+    try {
+      const { refreshMarketplace } = await import('./resources/marketplace.js');
+      const updated = await refreshMarketplace(localConfig.repo.localPath);
+      if (updated) {
+        pushedFiles.push('.codebuddy-plugin/marketplace.json');
+        log.debug('Refreshed marketplace.json');
       }
+    } catch (e) {
+      log.debug(`Marketplace refresh skipped: ${(e as Error).message}`);
     }
 
     // Create branch, commit, and push.
-    // Only include "sweeper" directories (rules/) that actually exist —
-    // otherwise `git add 'rules/'` throws `pathspec did not match any files`
-    // and the whole push aborts (BUG #1). A team may not have rules/ yet.
+    // Only include "sweeper" directories that actually exist — otherwise
+    // `git add 'rules/'` throws `pathspec did not match any files` and the
+    // whole push aborts (BUG #1). A team may not have rules/ yet. plugins/ is
+    // swept so a marketplace entry never points at a directory left behind.
     // env/ is not swept: each env item is its own file in pushedFiles, and a
     // sweep would publish the env edits the user left out of the selection (#881).
-    const sweeperCandidates = ['rules/', '.codebuddy-plugin/'];
+    const sweeperCandidates = ['rules/', '.codebuddy-plugin/', 'plugins/'];
     const existingSweepers = await filterExistingTopLevelPaths(
       localConfig.repo.localPath,
       sweeperCandidates,

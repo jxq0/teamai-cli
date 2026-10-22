@@ -1,7 +1,7 @@
 import { probeBinary, type CommandExecutor } from '../utils/exec.js';
 
 export interface EnvironmentVersion {
-  name: 'Node' | 'npm' | 'Claude Code';
+  name: 'Node' | 'npm' | 'Claude Code' | 'CodeBuddy';
   version: string;
   available: boolean;
 }
@@ -14,14 +14,16 @@ function normalizeVersion(raw: string): string {
 export async function detectPackageEnvironment(
   executor?: CommandExecutor,
 ): Promise<EnvironmentVersion[]> {
-  const [node, npm, claude] = await Promise.all([
+  const [node, npm, claude, codebuddy] = await Promise.all([
     probeBinary('node', ['--version'], executor),
     probeBinary('npm', ['--version'], executor),
     probeBinary('claude', ['--version'], executor),
+    probeBinary('codebuddy', ['--version'], executor),
   ]);
   return [
     { name: 'Node', version: normalizeVersion(node), available: !!node },
     { name: 'npm', version: normalizeVersion(npm), available: !!npm },
     { name: 'Claude Code', version: normalizeVersion(claude), available: !!claude },
+    { name: 'CodeBuddy', version: normalizeVersion(codebuddy), available: !!codebuddy },
   ];
 }
