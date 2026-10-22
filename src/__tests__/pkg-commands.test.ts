@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
   claudeSnapshot: vi.fn(),
   claudeStatus: vi.fn(),
   claudeMarketplaceStatus: vi.fn(),
+  codebuddyInstall: vi.fn(),
+  codebuddySnapshot: vi.fn(),
+  codebuddyStatus: vi.fn(),
+  codebuddyMarketplaceStatus: vi.fn(),
   detectPackageEnvironment: vi.fn(),
   registeredMarketplaces: vi.fn(),
   assertNotReadOnly: vi.fn(),
@@ -59,11 +63,21 @@ vi.mock('../pkg/adapters/claude-plugin.js', () => ({
   },
 }));
 
+vi.mock('../pkg/adapters/codebuddy-plugin.js', () => ({
+  CodeBuddyCliUnavailableError: class CodeBuddyCliUnavailableError extends Error {},
+  CodeBuddyPluginAdapter: class {
+    install = mocks.codebuddyInstall;
+    snapshot = mocks.codebuddySnapshot;
+    status = mocks.codebuddyStatus;
+    marketplaceStatus = mocks.codebuddyMarketplaceStatus;
+  },
+}));
+
 vi.mock('../pkg/env-detect.js', () => ({
   detectPackageEnvironment: mocks.detectPackageEnvironment,
 }));
 
-import { pkgDoctorReport, pkgInstall } from '../pkg/commands.js';
+import { installCodeBuddyPackages, pkgDoctorReport, pkgInstall } from '../pkg/commands.js';
 import {
   loadPackageLock,
   loadPackageManifest,
@@ -118,6 +132,10 @@ describe('pkgInstall npm target options', () => {
     }]);
     mocks.claudeInstall.mockResolvedValue({ marketplaces: [], plugins: [] });
     mocks.claudeSnapshot.mockResolvedValue({ marketplaces: [], plugins: [] });
+    mocks.codebuddyInstall.mockResolvedValue({ marketplaces: [], plugins: [] });
+    mocks.codebuddySnapshot.mockResolvedValue({ marketplaces: [], plugins: [] });
+    mocks.codebuddyStatus.mockResolvedValue([]);
+    mocks.codebuddyMarketplaceStatus.mockResolvedValue([]);
     mocks.npmStatus.mockResolvedValue([]);
     mocks.claudeStatus.mockResolvedValue([]);
     mocks.claudeMarketplaceStatus.mockResolvedValue([]);
@@ -451,5 +469,142 @@ describe('pkgInstall npm target options', () => {
     expect(report?.allPassed).toBe(false);
     expect(report?.lines.join('\n')).toContain('✖ lint@acme');
     expect(report?.lines.join('\n')).toContain('declared 2.0.0, installed 1.0.0');
+  });
+
+  it('requires plugin@marketplace syntax when --codebuddy is explicit', async () => {
+    await expect(pkgInstall('deploy-tools', { codebuddy: true }))
+      .rejects.toThrow('plugin@marketplace');
+    expect(mocks.codebuddyInstall).not.toHaveBeenCalled();
+  });
+
+  it('rejects --claude and --codebuddy together', async () => {
+    await expect(pkgInstall('deploy-tools@acme', { claude: true, codebuddy: true }))
+      .rejects.toThrow('mutually exclusive');
+    expect(mocks.claudeInstall).not.toHaveBeenCalled();
+    expect(mocks.codebuddyInstall).not.toHaveBeenCalled();
+  });
+
+  it('rejects a CodeBuddy target whose marketplace is not declared', async () => {
+    await expect(pkgInstall('deploy-tools@acme-tools', { codebuddy: true }))
+      .rejects.toThrow('packages.codebuddy.marketplaces');
+    expect(mocks.codebuddyInstall).not.toHaveBeenCalled();
+  });
+
+  it('declares and installs a CodeBuddy plugin in a declared marketplace', async () => {
+    fs.writeFileSync(path.join(teamRepo, 'teamai.yaml'), YAML.stringify({
+      team: 'platform',
+      repo: 'acme/team',
+      packages: {
+        codebuddy: {
+          marketplaces: [{ name: 'herdr-codebuddy', repo: 'git@git.woa.com:acme/herdr.git' }],
+        },
+      },
+    }));
+    const section = {
+      marketplaces: [{
+        name: 'herdr-codebuddy',
+        source: 'git',
+        repo: 'git@git.woa.com:acme/herdr.git',
+      }],
+      plugins: [{
+        id: 'herdr-codebuddy@herdr-codebuddy',
+        version: '1.0.0',
+        scope: 'project',
+        enabled: true,
+      }],
+    };
+    mocks.codebuddyInstall.mockResolvedValue(section);
+    mocks.codebuddySnapshot.mockResolvedValue(section);
+
+    await pkgInstall('herdr-codebuddy@herdr-codebuddy', { codebuddy: true });
+
+    expect(mocks.codebuddyInstall).toHaveBeenCalledWith(
+      {
+        marketplaces: [{ name: 'herdr-codebuddy', repo: 'git@git.woa.com:acme/herdr.git' }],
+        plugins: [{ name: 'herdr-codebuddy@herdr-codebuddy' }],
+      },
+      expect.objectContaining({
+        cwd: expect.stringContaining(path.basename(projectRoot)),
+        scope: 'project',
+        teamRepoPath: teamRepo,
+      }),
+    );
+    const raw = YAML.parse(fs.readFileSync(path.join(teamRepo, 'teamai.yaml'), 'utf8'));
+    expect(raw.packages.codebuddy.plugins).toEqual([
+      { name: 'herdr-codebuddy@herdr-codebuddy' },
+    ]);
+    const lock = await loadPackageLock(path.join(projectRoot, '.teamai'));
+    expect(lock?.packages.codebuddy?.plugins[0]).toMatchObject({
+      id: 'herdr-codebuddy@herdr-codebuddy',
+      version: '1.0.0',
+      enabled: true,
+    });
+  });
+
+  it('records a CodeBuddy install and acknowledges a plugin-only declaration', async () => {
+    fs.writeFileSync(path.join(teamRepo, 'teamai.yaml'), YAML.stringify({
+      packages: {
+        codebuddy: {
+          marketplaces: [{ name: 'team' }],
+          plugins: [{ name: 'review@team' }],
+        },
+      },
+    }));
+    mocks.codebuddyInstall.mockResolvedValue({
+      marketplaces: [{ name: 'team', source: 'directory', repo: teamRepo }],
+      plugins: [{ id: 'review@team', version: '1.0.0', scope: 'project', enabled: true }],
+    });
+
+    await installCodeBuddyPackages(LocalConfigSchema.parse({
+      repo: { localPath: teamRepo, remote: 'x', kind: 'git' },
+      username: 'alice',
+      scope: 'project',
+      projectRoot,
+    }));
+
+    const manifest = await loadPackageManifest(teamRepo);
+    const lock = await loadPackageLock(path.join(projectRoot, '.teamai'));
+    expect(lock?.packages.codebuddy?.plugins[0].id).toBe('review@team');
+    expect(lock?.declarationHash).toBe(packageDeclarationHash(manifest));
+  });
+
+  it('reports CodeBuddy marketplaces and plugins in doctor', async () => {
+    fs.writeFileSync(path.join(teamRepo, 'teamai.yaml'), YAML.stringify({
+      packages: {
+        codebuddy: {
+          marketplaces: [{ name: 'team' }],
+          plugins: [{ name: 'review@team' }],
+        },
+      },
+    }));
+    mocks.detectPackageEnvironment.mockResolvedValue([
+      { name: 'Node', version: '22.0.0', available: true },
+      { name: 'npm', version: '10.0.0', available: true },
+      { name: 'Claude Code', version: '', available: false },
+      { name: 'CodeBuddy', version: '2.0.0', available: true },
+    ]);
+    mocks.codebuddyMarketplaceStatus.mockResolvedValue([{
+      name: 'team',
+      installed: true,
+      detail: 'directory marketplace',
+    }]);
+    mocks.codebuddyStatus.mockResolvedValue([{
+      name: 'review@team',
+      installed: false,
+      detail: 'declared but not installed',
+    }]);
+
+    const report = await pkgDoctorReport(LocalConfigSchema.parse({
+      repo: { localPath: teamRepo, remote: 'x', kind: 'git' },
+      username: 'alice',
+      scope: 'project',
+      projectRoot,
+    }), projectRoot);
+
+    expect(report?.allPassed).toBe(false);
+    expect(report?.lines.join('\n')).toContain('CodeBuddy');
+    expect(report?.lines.join('\n')).toContain('CodeBuddy marketplaces');
+    expect(report?.lines.join('\n')).toContain('Packages (codebuddy plugins)');
+    expect(report?.lines.join('\n')).toContain('declared but not installed');
   });
 });

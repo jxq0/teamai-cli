@@ -7,6 +7,10 @@ import {
   ClaudePluginAdapter,
   marketplaceSourceLocation,
 } from './adapters/claude-plugin.js';
+import {
+  CodeBuddyCliUnavailableError,
+  CodeBuddyPluginAdapter,
+} from './adapters/codebuddy-plugin.js';
 import { NpmAdapter } from './adapters/npm.js';
 import type { PackageInstallContext } from './adapters/base.js';
 import { detectPackageEnvironment } from './env-detect.js';
@@ -25,6 +29,7 @@ import {
 } from './manifest.js';
 import type {
   ClaudeMarketplace,
+  CodeBuddyMarketplace,
   NpmSpec,
   PackageLock,
   PackageManifest,
@@ -86,6 +91,28 @@ function ensureClaudeManifest(manifest: PackageManifest): NonNullable<PackageMan
   return manifest.packages.claude;
 }
 
+function ensureCodeBuddyManifest(manifest: PackageManifest): NonNullable<PackageManifest['packages']['codebuddy']> {
+  manifest.packages.codebuddy ??= { marketplaces: [], plugins: [] };
+  return manifest.packages.codebuddy;
+}
+
+/**
+ * Resolve a declared CodeBuddy plugin target. Unlike Claude, an undeclared
+ * marketplace cannot be recovered from the CLI: its list output has no source,
+ * so the declaration has to name the repository (or the team repository).
+ */
+function resolveCodeBuddyTarget(
+  target: string,
+  manifest: PackageManifest,
+): { marketplace: string; declaration: CodeBuddyMarketplace } | null {
+  const marketplace = pluginMarketplace(target);
+  if (!marketplace) return null;
+  const declared = manifest.packages.codebuddy?.marketplaces.find(
+    (item) => item.name === marketplace,
+  );
+  return declared ? { marketplace, declaration: declared } : null;
+}
+
 async function resolveClaudeTarget(
   target: string,
   manifest: PackageManifest,
@@ -117,18 +144,16 @@ async function resolveClaudeTarget(
   return { marketplace, declaration: { name: marketplace, repo } };
 }
 
-interface AddedTarget {
-  ecosystem: 'npm' | 'claude';
-  npm?: NpmSpec;
-  marketplace?: ClaudeMarketplace;
-  pluginName?: string;
-}
+type AddedTarget =
+  | { ecosystem: 'npm'; npm: NpmSpec }
+  | { ecosystem: 'claude'; marketplace: ClaudeMarketplace; pluginName: string }
+  | { ecosystem: 'codebuddy'; marketplace: CodeBuddyMarketplace; pluginName: string };
 
 async function addTarget(
   target: string,
   manifest: PackageManifest,
   claude: ClaudePluginAdapter,
-  options: Pick<GlobalOptions, 'global' | 'registry' | 'npm' | 'claude'>,
+  options: Pick<GlobalOptions, 'global' | 'registry' | 'npm' | 'claude' | 'codebuddy'>,
 ): Promise<AddedTarget> {
   const addNpm = (): AddedTarget => {
     const spec = upsertNpm(manifest, {
@@ -143,7 +168,31 @@ async function addTarget(
   if (options.claude && !marketplace) {
     throw new Error('Claude plugin targets must use the plugin@marketplace format');
   }
+  if (options.codebuddy && !marketplace) {
+    throw new Error('CodeBuddy plugin targets must use the plugin@marketplace format');
+  }
   if (options.npm || options.global || options.registry || !marketplace) return addNpm();
+
+  if (options.codebuddy) {
+    const codebuddyTarget = resolveCodeBuddyTarget(target, manifest);
+    if (!codebuddyTarget) {
+      throw new Error(
+        `CodeBuddy marketplace "${marketplace}" is not declared. Add it under packages.codebuddy.marketplaces in teamai.yaml first.`,
+      );
+    }
+    const ecosystem = ensureCodeBuddyManifest(manifest);
+    if (!ecosystem.marketplaces.some((item) => item.name === codebuddyTarget.marketplace)) {
+      ecosystem.marketplaces.push(codebuddyTarget.declaration);
+    }
+    if (!ecosystem.plugins.some((item) => item.name === target)) {
+      ecosystem.plugins.push({ name: target });
+    }
+    return {
+      ecosystem: 'codebuddy',
+      marketplace: codebuddyTarget.declaration,
+      pluginName: target,
+    };
+  }
 
   const claudeTarget = await resolveClaudeTarget(target, manifest, claude);
   if (!claudeTarget) {
@@ -191,15 +240,22 @@ export async function pkgInstall(
   const lockDir = await packageLockDir(localConfig, { readOnly: options.dryRun });
   const npm = new NpmAdapter();
   const claude = new ClaudePluginAdapter();
+  const codebuddy = new CodeBuddyPluginAdapter();
 
   if (options.npm && options.claude) {
     throw new Error('--npm and --claude are mutually exclusive');
   }
-  if (options.claude && (options.global || options.registry)) {
+  if (options.npm && options.codebuddy) {
+    throw new Error('--npm and --codebuddy are mutually exclusive');
+  }
+  if (options.claude && options.codebuddy) {
+    throw new Error('--claude and --codebuddy are mutually exclusive');
+  }
+  if ((options.claude || options.codebuddy) && (options.global || options.registry)) {
     throw new Error('--global and --registry only apply to npm package targets');
   }
-  if (!target && (options.global || options.registry || options.npm || options.claude)) {
-    throw new Error('--global, --registry, --npm, and --claude require a package target');
+  if (!target && (options.global || options.registry || options.npm || options.claude || options.codebuddy)) {
+    throw new Error('--global, --registry, --npm, --claude, and --codebuddy require a package target');
   }
   if (target) assertNotReadOnly(localConfig, 'teamai packages install <target>');
   const added = target ? await addTarget(target, manifest, claude, options) : undefined;
@@ -215,6 +271,7 @@ export async function pkgInstall(
     scope: localConfig.scope,
     dryRun: options.dryRun,
     previousPackages: previousLock?.packages,
+    teamRepoPath: localConfig.repo.localPath,
   };
   const lock: PackageLock = {
     version: 1,
@@ -242,7 +299,7 @@ export async function pkgInstall(
   }
 
   if ((manifest.packages.npm?.length ?? 0) > 0 && (!added || added.ecosystem === 'npm')) {
-    if (added?.npm) {
+    if (added && added.ecosystem === 'npm') {
       await npm.install([added.npm], context);
       if (!options.dryRun) {
         lock.packages.npm = await npm.snapshot(cwd, manifest.packages.npm ?? []);
@@ -252,7 +309,7 @@ export async function pkgInstall(
     }
   }
   if (manifest.packages.claude && (!added || added.ecosystem === 'claude')) {
-    if (added?.marketplace && added.pluginName) {
+    if (added && added.ecosystem === 'claude') {
       await claude.install({
         marketplaces: [added.marketplace],
         plugins: [{ name: added.pluginName }],
@@ -262,6 +319,19 @@ export async function pkgInstall(
       }
     } else {
       lock.packages.claude = await claude.install(manifest.packages.claude, context);
+    }
+  }
+  if (manifest.packages.codebuddy && (!added || added.ecosystem === 'codebuddy')) {
+    if (added && added.ecosystem === 'codebuddy') {
+      await codebuddy.install({
+        marketplaces: [added.marketplace],
+        plugins: [{ name: added.pluginName }],
+      }, context);
+      if (!options.dryRun) {
+        lock.packages.codebuddy = await codebuddy.snapshot(manifest.packages.codebuddy, context);
+      }
+    } else {
+      lock.packages.codebuddy = await codebuddy.install(manifest.packages.codebuddy, context);
     }
   }
 
@@ -275,6 +345,55 @@ export async function pkgInstall(
   }
   await savePackageLock(lockDir, lock);
   log.success('TeamAI packages installed; wrote teamai.lock');
+}
+
+/**
+ * Install the CodeBuddy plugins a team declares, after an interactive pull.
+ * A plugin is content the team delivers, so a human-triggered pull applies it;
+ * a machine without the CodeBuddy CLI skips it silently, so sharing a plugin
+ * does not fail pulls for members who do not use CodeBuddy.
+ *
+ * Writes only the lock. Throws a real install failure for the pull to report;
+ * nothing here can fail the pull itself.
+ */
+export async function installCodeBuddyPackages(localConfig: LocalConfig): Promise<void> {
+  if (!await pathExists(packageManifestPath(localConfig.repo.localPath))) return;
+  const manifest = await loadPackageManifest(localConfig.repo.localPath);
+  const declaration = manifest.packages.codebuddy;
+  if (!declaration) return;
+  if (declaration.marketplaces.length === 0 && declaration.plugins.length === 0) return;
+
+  const adapter = new CodeBuddyPluginAdapter();
+  const lockDir = await packageLockDir(localConfig);
+  const previousLock = await loadPackageLock(lockDir);
+  try {
+    const section = await adapter.install(declaration, {
+      cwd: localConfig.projectRoot ?? process.cwd(),
+      scope: localConfig.scope,
+      previousPackages: previousLock?.packages,
+      teamRepoPath: localConfig.repo.localPath,
+    });
+    const lock: PackageLock = previousLock ?? { version: 1, packages: {} };
+    lock.packages.codebuddy = section;
+    // CodeBuddy declarations alone are now applied, so acknowledge them. npm
+    // and Claude plugins stay manual: a pending declaration of either keeps
+    // the SessionStart hint alive.
+    const hasManualDeclarations = (manifest.packages.npm?.length ?? 0) > 0
+      || (manifest.packages.claude?.marketplaces.length ?? 0) > 0
+      || (manifest.packages.claude?.plugins.length ?? 0) > 0;
+    if (!hasManualDeclarations) {
+      lock.declarationHash = localConfig.scope === 'user'
+        ? sharedPackageDeclarationHash(manifest)
+        : packageDeclarationHash(manifest);
+    }
+    await savePackageLock(lockDir, lock);
+  } catch (error) {
+    if (error instanceof CodeBuddyCliUnavailableError) {
+      log.debug('CodeBuddy plugins are declared, but the CodeBuddy CLI is not installed; skipped');
+      return;
+    }
+    throw error;
+  }
 }
 
 export interface PackageDoctorReport {
@@ -304,6 +423,7 @@ export async function pkgDoctorReport(
 
   const npm = new NpmAdapter();
   const claude = new ClaudePluginAdapter();
+  const codebuddy = new CodeBuddyPluginAdapter();
   // doctor is read-only: it reads an older lock where it is, and the next install or session moves it.
   const previousLock = await loadPackageLock(await packageLockDir(localConfig, { readOnly: true }));
   const context: PackageInstallContext = {
@@ -316,9 +436,13 @@ export async function pkgDoctorReport(
   const needsClaudeMarketplaces = (manifest.packages.claude?.marketplaces.length ?? 0) > 0;
   const needsClaudePlugins = (manifest.packages.claude?.plugins.length ?? 0) > 0;
   const needsClaude = needsClaudeMarketplaces || needsClaudePlugins;
+  const needsCodeBuddyMarketplaces = (manifest.packages.codebuddy?.marketplaces.length ?? 0) > 0;
+  const needsCodeBuddyPlugins = (manifest.packages.codebuddy?.plugins.length ?? 0) > 0;
+  const needsCodeBuddy = needsCodeBuddyMarketplaces || needsCodeBuddyPlugins;
   const requiredEnvironment = environment.filter((item) =>
     (needsNpm && (item.name === 'Node' || item.name === 'npm'))
-    || (needsClaude && item.name === 'Claude Code'));
+    || (needsClaude && item.name === 'Claude Code')
+    || (needsCodeBuddy && item.name === 'CodeBuddy'));
 
   const lines = ['', '  Environment'];
   let allPassed = true;
@@ -344,6 +468,25 @@ export async function pkgDoctorReport(
   if (needsClaudePlugins) {
     lines.push('', '  Packages (claude plugins)');
     for (const status of await claude.status(manifest.packages.claude!, context)) {
+      const ok = status.installed && status.enabled !== false;
+      const suffix = status.installed
+        ? `${status.version ?? 'unknown'} (${status.enabled === false ? 'disabled' : 'enabled'})`
+        : status.detail ?? 'declared but not installed';
+      lines.push(`  ${ok ? '✔' : '✖'} ${status.name.padEnd(42)} ${suffix}`);
+      if (status.detail && status.installed) lines.push(`    → ${status.detail}`);
+      if (!ok) allPassed = false;
+    }
+  }
+  if (needsCodeBuddyMarketplaces) {
+    lines.push('', '  CodeBuddy marketplaces');
+    for (const status of await codebuddy.marketplaceStatus(manifest.packages.codebuddy!, context)) {
+      lines.push(`  ${status.installed ? '✔' : '✖'} ${status.name.padEnd(42)} ${status.detail ?? ''}`.trimEnd());
+      if (!status.installed) allPassed = false;
+    }
+  }
+  if (needsCodeBuddyPlugins) {
+    lines.push('', '  Packages (codebuddy plugins)');
+    for (const status of await codebuddy.status(manifest.packages.codebuddy!, context)) {
       const ok = status.installed && status.enabled !== false;
       const suffix = status.installed
         ? `${status.version ?? 'unknown'} (${status.enabled === false ? 'disabled' : 'enabled'})`

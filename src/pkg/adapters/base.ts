@@ -7,10 +7,12 @@ export interface PackageInstallContext {
   scope: Scope;
   dryRun?: boolean;
   previousPackages?: PackageLock['packages'];
+  /** Team repository checkout, used as a marketplace when a declaration omits `repo`. */
+  teamRepoPath?: string;
 }
 
 export abstract class PackageAdapter<TDeclaration, TLockSection> {
-  abstract readonly ecosystem: 'npm' | 'claude';
+  abstract readonly ecosystem: 'npm' | 'claude' | 'codebuddy';
 
   protected readonly execute: CommandExecutor;
 

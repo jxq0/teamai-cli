@@ -275,6 +275,24 @@ packages:
 
 pull 之后跑 `teamai packages`。
 
+### CodeBuddy 插件
+
+CodeBuddy 的 marketplace 和插件用同样的方式声明。`repo` 省略表示 marketplace 就是团队仓库本身，插件放在 `plugins/<name>/`，并带有 `.codebuddy-plugin/plugin.json`。
+
+```yaml
+packages:
+  codebuddy:
+    marketplaces:
+      - name: herdr-codebuddy
+        repo: git@git.woa.com:acme/herdr-codebuddy.git
+      - name: acme-team
+    plugins:
+      - name: herdr-codebuddy@herdr-codebuddy
+      - name: review-kit@acme-team
+```
+
+交互式执行 `teamai pull` 时会为成员安装这些插件。`teamai packages` 也会安装，并一起处理 npm 包和 Claude 插件。没有安装 CodeBuddy CLI 的机器会跳过。`teamai push` 会提交 `plugins/`，并刷新 `.codebuddy-plugin/marketplace.json`。
+
 ## Docs（文档）
 
 把文件放进团队仓库的 `docs/`，提交后成员 `pull` 时同步。某个目录只给一部分人时，在 `resources.docs` 里声明：

@@ -164,6 +164,7 @@ export function sharedPackageDeclarationHash(manifest: PackageManifest): string 
   return packageSetHash({
     ...(npm && npm.length > 0 ? { npm } : {}),
     ...(manifest.packages.claude ? { claude: manifest.packages.claude } : {}),
+    ...(manifest.packages.codebuddy ? { codebuddy: manifest.packages.codebuddy } : {}),
   });
 }
 
@@ -188,5 +189,7 @@ export function packageProjectKey(cwd: string): string {
 export function hasPackageDeclarations(manifest: PackageManifest): boolean {
   return (manifest.packages.npm?.length ?? 0) > 0
     || (manifest.packages.claude?.marketplaces.length ?? 0) > 0
-    || (manifest.packages.claude?.plugins.length ?? 0) > 0;
+    || (manifest.packages.claude?.plugins.length ?? 0) > 0
+    || (manifest.packages.codebuddy?.marketplaces.length ?? 0) > 0
+    || (manifest.packages.codebuddy?.plugins.length ?? 0) > 0;
 }
